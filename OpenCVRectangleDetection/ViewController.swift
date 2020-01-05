@@ -9,14 +9,19 @@
 import UIKit
 import AVFoundation
 
+let DP_EPSILON_FACTOR = 0.015;
+let MINIMUM_SIZE = 25000;
+let QUADRATURE_TOLERANCE = 0.4;
+
 class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDelegate {
-    @IBOutlet weak var imageView: UIImageView!
     var captureSession: AVCaptureSession?
+    var boxLayer: CALayer?
+    var rectangleDetector = RectangleDetector(epsilon: DP_EPSILON_FACTOR, maximumSize: Int32(MINIMUM_SIZE), quadratureTolerance: QUADRATURE_TOLERANCE)
+    lazy var throttledProcessImage = throttle(delay: 0.5, action: processImage)
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        setupImageView()
         switch AVCaptureDevice.authorizationStatus(for: .video) {
             case .authorized:
                 setupCaptureSession()
@@ -40,11 +45,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         captureSession?.stopRunning()
     }
 
-    func setupImageView() {
-        imageView.frame = view.layer.bounds
-        imageView.contentMode = .scaleAspectFill
-    }
-
     func setupCaptureSession() {
         captureSession = AVCaptureSession()
         captureSession!.beginConfiguration()
@@ -62,30 +62,72 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "com.li357.cvrd.Video"))
         captureSession!.addInput(deviceInput)
         captureSession!.addOutput(videoOutput)
-        captureSession!.sessionPreset = .photo
+        captureSession!.sessionPreset = .high
         captureSession!.commitConfiguration()
+
+        let previewLayer = AVCaptureVideoPreviewLayer()
+        previewLayer.session = captureSession!
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = view.layer.frame
+        view.layer.addSublayer(previewLayer)
+
+        boxLayer = CALayer()
+        previewLayer.addSublayer(boxLayer!)
     }
 
     // MARK: AVCaptureVideoDataOutputSampleBufferDelegate
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let uiImage = sampleBuffer.toUIImage() else {
+        throttledProcessImage(sampleBuffer)
+    }
+
+    func convertFromCamera(_ point: CGPoint, widthScale: CGFloat, heightScale: CGFloat) -> CGPoint {
+        return CGPoint(x: point.x * widthScale, y: point.y * heightScale)
+    }
+
+    func processImage(_ sampleBuffer: CMSampleBuffer) {
+        guard
+            let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+            let uiImage = imageBuffer.toUIImage()
+        else {
             return
         }
 
-        let withContours = RectangleDetection.drawContours(uiImage)
+        boxLayer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+        let rectangles = rectangleDetector?.findRectangles(in: uiImage)
+
+        // Buffer is height x width, not width x height
+        let bufferWidth = CGFloat(CVPixelBufferGetHeight(imageBuffer))
+        let bufferHeight = CGFloat(CVPixelBufferGetWidth(imageBuffer))
+
+        let widthScale = view.bounds.width / bufferWidth
+        let heightScale = view.bounds.height / bufferHeight
+
         DispatchQueue.main.async {
-            self.imageView.image = withContours
+            rectangles?
+                .compactMap { $0 as? Rectangle }
+                .forEach { rectangle in
+                    let box = CAShapeLayer()
+                    box.strokeColor = UIColor.systemGreen.cgColor
+                    box.lineWidth = 3
+                    box.lineJoin = .miter
+                    box.opacity = 0.5
+
+                    let path = UIBezierPath()
+                    path.move(to: self.convertFromCamera(rectangle.topLeft, widthScale: widthScale, heightScale: heightScale))
+                    path.addLine(to: self.convertFromCamera(rectangle.topRight, widthScale: widthScale, heightScale: heightScale))
+                    path.addLine(to: self.convertFromCamera(rectangle.bottomRight, widthScale: widthScale, heightScale: heightScale))
+                    path.addLine(to: self.convertFromCamera(rectangle.bottomLeft, widthScale: widthScale, heightScale: heightScale))
+                    path.close()
+                    box.path = path.cgPath
+                    self.boxLayer?.addSublayer(box)
+                }
         }
     }
 }
 
-extension CMSampleBuffer {
+extension CVImageBuffer {
     func toUIImage() -> UIImage? {
-        guard let imageBuffer = CMSampleBufferGetImageBuffer(self) else {
-          return nil
-        }
-
-        let ciImage = CIImage(cvImageBuffer: imageBuffer).oriented(.right)
+        let ciImage = CIImage(cvImageBuffer: self).oriented(.right)
         let context = CIContext.init(options: nil)
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
             return nil
