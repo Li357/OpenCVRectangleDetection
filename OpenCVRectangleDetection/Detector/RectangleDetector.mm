@@ -24,7 +24,7 @@
 
 + (CGPoint) convertToCGPoint:(cv::Point)point;
 + (void) autoCannyOn:(cv::InputArray)src into:(cv::OutputArray)edges withSigma:(double)sigma;
-+ (double) findAngleBetweenPoints:(cv::Point)p1 and:(cv::Point)p2 withPivot:(cv::Point)p0;
++ (double) cosOfAngleBetweenPoints:(cv::Point)p1 and:(cv::Point)p2 withPivot:(cv::Point)p0;
 
 @end
 
@@ -58,7 +58,7 @@
     cv::Canny(src, edges, lower, upper);
 }
 
-+ (double) findAngleBetweenPoints:(cv::Point)p1 and:(cv::Point)p2 withPivot:(cv::Point)p0
++ (double) cosOfAngleBetweenPoints:(cv::Point)p1 and:(cv::Point)p2 withPivot:(cv::Point)p0
 {
     double dx1 = p1.x - p0.x;
     double dy1 = p1.y - p0.y;
@@ -98,7 +98,7 @@
         if (approx.size() == 4 && fabs(cv::contourArea(approx)) > MINIMUM_SIZE && cv::isContourConvex(approx)) {
             double maxCosine = 0;
             for (int j = 2; j < 5; j++) {
-                double absCosine = fabs([[self class] findAngleBetweenPoints:approx[j % 4] and:approx[j - 2] withPivot:approx[j - 1]]);
+                double absCosine = fabs([[self class] cosOfAngleBetweenPoints:approx[j % 4] and:approx[j - 2] withPivot:approx[j - 1]]);
                 maxCosine = std::max(maxCosine, absCosine);
             }
 
